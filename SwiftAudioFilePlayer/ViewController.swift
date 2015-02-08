@@ -12,13 +12,24 @@ import AudioToolbox
 class ViewController: UIViewController {
     
     var audio = Audio()
-    
+
     @IBAction func playPressed() {
-        audio.playFile()
+        audio.scheduleRegion()
+        AUGraphStart(audio.graph)
+    }
+    
+    @IBAction func pausePressed() {
+        AUGraphStop(audio.graph)
+        var propSize: Int = sizeof(Int64)
+        var propSize32 = UInt32(propSize)
+        AudioUnitGetProperty(audio.filePlayerAU, AudioUnitPropertyID(kAudioUnitProperty_CurrentPlayTime), AudioUnitScope(kAudioUnitScope_Global), 0, &audio.currentFrame, &propSize32)
+        
+        println("frame = \(audio.currentFrame)")
     }
     
     override func viewDidLoad() {
         super.viewDidLoad()
+        audio.scheduleFile(NSBundle.mainBundle().URLForResource("Devil On A Good Day", withExtension: "mp3")!)
     }
 
     override func didReceiveMemoryWarning() {
@@ -29,19 +40,24 @@ class ViewController: UIViewController {
 class Audio: NSObject {
     var graph: AUGraph
     var filePlayerAU: AudioUnit
+    var filePlayerNode: AUNode
     var outputAU: AudioUnit
+    var fileID: AudioFileID
+    var currentFrame: Int64
     
     override init () {
         graph = AUGraph()
         filePlayerAU = AudioUnit()
+        filePlayerNode = AUNode()
         outputAU = AudioUnit()
-        
+        fileID = AudioFileID()
+        currentFrame = 0
+
         super.init()
         
         NewAUGraph(&graph)
         
         // Add file player node
-        var filePlayerNode = AUNode()
         var cd = AudioComponentDescription(componentType: OSType(kAudioUnitType_Generator),
                                             componentSubType: OSType(kAudioUnitSubType_AudioFilePlayer),
                                             componentManufacturer: OSType(kAudioUnitManufacturer_Apple),
@@ -63,13 +79,11 @@ class Audio: NSObject {
         
         AUGraphConnectNodeInput(graph, filePlayerNode, 0, outputNode, 0)
         AUGraphInitialize(graph)
-        AUGraphStart(graph)
+    
+        registerCallbackForAU(filePlayerAU, nil)
     }
     
-    func playFile() {
-        let url = NSBundle.mainBundle().URLForResource("Devil On A Good Day", withExtension: "mp3")
-        
-        var fileID = AudioFileID()
+    func scheduleFile(url: NSURL) {
         AudioFileOpenURL(url, 1, 0, &fileID)
         
         // Step 1: schedule the file(s)
@@ -79,7 +93,9 @@ class Audio: NSObject {
                                 AudioUnitPropertyID(kAudioUnitProperty_ScheduledFileIDs),
                                 AudioUnitScope(kAudioUnitScope_Global), 0, filesToSchedule,
                                 UInt32(sizeof(AudioFileID)))
-        
+    }
+    
+    func scheduleRegion() {
         // Step 2: Schedule the regions of the file(s) to play
         // Swift forces us to fill out the structs completely, even if they are not used
         let smpteTime = SMPTETime(mSubframes: 0, mSubframeDivisor: 0,
@@ -92,7 +108,7 @@ class Audio: NSObject {
         
         var region = ScheduledAudioFileRegion(mTimeStamp: timeStamp, mCompletionProc: nil,
                                                 mCompletionProcUserData: nil, mAudioFile: fileID,
-                                                mLoopCount: 0, mStartFrame: 0,
+                                                mLoopCount: 0, mStartFrame: currentFrame,
                                                 mFramesToPlay: UInt32.max)
         
         AudioUnitSetProperty(filePlayerAU,
